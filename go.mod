@@ -1,8 +1,9 @@
-module github.com/extracomplex/wireguard-go
+module github.com/extracomplex/wireguard-go-swgp
 
 go 1.20
 
 require (
+	github.com/database64128/swgp-go v1.4.0
 	golang.org/x/crypto v0.13.0
 	golang.org/x/net v0.15.0
 	golang.org/x/sys v0.12.0
@@ -11,7 +12,6 @@ require (
 )
 
 require (
-	github.com/database64128/swgp-go v1.4.0 // indirect
 	github.com/google/btree v1.0.1 // indirect
 	golang.org/x/time v0.0.0-20220210224613-90d013bbcef8 // indirect
 )
