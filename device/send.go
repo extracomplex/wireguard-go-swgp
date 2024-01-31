@@ -14,11 +14,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/extracomplex/wireguard-go-swgp/conn"
+	"github.com/extracomplex/wireguard-go-swgp/tun"
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
-	"golang.zx2c4.com/wireguard/conn"
-	"golang.zx2c4.com/wireguard/tun"
 )
 
 /* Outbound flow
@@ -124,7 +124,7 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 		return err
 	}
 
-	var buf [MessageInitiationSize]byte
+	var buf [MessageInitiationSize + zeroOverheadHandshakePacketMinimumOverhead + 100]byte
 	writer := bytes.NewBuffer(buf[:0])
 	binary.Write(writer, binary.LittleEndian, msg)
 	packet := writer.Bytes()
@@ -133,6 +133,12 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 	peer.timersAnyAuthenticatedPacketTraversal()
 	peer.timersAnyAuthenticatedPacketSent()
 
+	// obfuscate
+	packet, err = peer.device.obfuscatePacket(packet)
+	if err != nil {
+		peer.device.log.Errorf("Failed to obfuscate packet: %v", err)
+		return err
+	}
 	err = peer.SendBuffers([][]byte{packet})
 	if err != nil {
 		peer.device.log.Errorf("%v - Failed to send handshake initiation: %v", peer, err)
@@ -155,7 +161,7 @@ func (peer *Peer) SendHandshakeResponse() error {
 		return err
 	}
 
-	var buf [MessageResponseSize]byte
+	var buf [MessageResponseSize + zeroOverheadHandshakePacketMinimumOverhead + 100]byte
 	writer := bytes.NewBuffer(buf[:0])
 	binary.Write(writer, binary.LittleEndian, response)
 	packet := writer.Bytes()
@@ -170,6 +176,12 @@ func (peer *Peer) SendHandshakeResponse() error {
 	peer.timersSessionDerived()
 	peer.timersAnyAuthenticatedPacketTraversal()
 	peer.timersAnyAuthenticatedPacketSent()
+	// obfuscate
+	packet, err = peer.device.obfuscatePacket(packet)
+	if err != nil {
+		peer.device.log.Errorf("Failed to obfuscate packet: %v", err)
+		return err
+	}
 
 	// TODO: allocation could be avoided
 	err = peer.SendBuffers([][]byte{packet})
@@ -189,11 +201,18 @@ func (device *Device) SendHandshakeCookie(initiatingElem *QueueHandshakeElement)
 		return err
 	}
 
-	var buf [MessageCookieReplySize]byte
+	var buf [MessageCookieReplySize + zeroOverheadHandshakePacketMinimumOverhead + 100]byte
 	writer := bytes.NewBuffer(buf[:0])
 	binary.Write(writer, binary.LittleEndian, reply)
+	packet := writer.Bytes()
+	// obfuscate
+	packet, err = device.obfuscatePacket(packet)
+	if err != nil {
+		device.log.Errorf("Failed to obfuscate cookie reply: %v", err)
+		return err
+	}
 	// TODO: allocation could be avoided
-	device.net.bind.Send([][]byte{writer.Bytes()}, initiatingElem.endpoint)
+	device.net.bind.Send([][]byte{packet}, initiatingElem.endpoint)
 	return nil
 }
 
@@ -511,10 +530,21 @@ func (peer *Peer) RoutineSequentialSender(maxBatchSize int) {
 		dataSent := false
 		elemsContainer.Lock()
 		for _, elem := range elemsContainer.elems {
-			if len(elem.packet) != MessageKeepaliveSize {
+			keepalive := len(elem.packet) == MessageKeepaliveSize
+
+			// obfuscate
+			packet, err := device.obfuscatePacket(elem.packet)
+			if err != nil {
+				device.log.Errorf("%v - Failed to obfuscate data packets: %v", peer, err)
+				continue
+			}
+
+			if !keepalive /*len(elem.packet) != MessageKeepaliveSize */ {
 				dataSent = true
 			}
-			bufs = append(bufs, elem.packet)
+
+			//bufs = append(bufs, elem.packet)
+			bufs = append(bufs, packet)
 		}
 
 		peer.timersAnyAuthenticatedPacketTraversal()
@@ -543,4 +573,30 @@ func (peer *Peer) RoutineSequentialSender(maxBatchSize int) {
 
 		peer.keepKeyFreshSending()
 	}
+}
+
+func (device *Device) obfuscatePacket(buf []byte) ([]byte, error) {
+	obfuscate := &device.packetObfuscate.obfuscate
+	device.packetObfuscate.Lock()
+	defer device.packetObfuscate.Unlock()
+
+	if !device.packetObfuscate.obfuscate.enabled {
+		return buf, nil
+	}
+
+	min := func(a, b int) int {
+		if a < b {
+			return a
+		}
+		return b
+	}
+
+	wgPacketStart := 0
+	wgPacketLength := len(buf)
+	packet := buf[:min(cap(buf), DefaultMTU+MessageTransportHeaderSize)]
+	swpgStart, swpgLength, err := obfuscate.EncryptZeroCopy(packet, wgPacketStart, wgPacketLength)
+	if err != nil {
+		return buf, err
+	}
+	return packet[swpgStart:(swpgStart + swpgLength)], nil
 }

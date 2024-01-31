@@ -13,10 +13,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/extracomplex/wireguard-go-swgp/conn"
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
-	"golang.zx2c4.com/wireguard/conn"
 )
 
 type QueueHandshakeElement struct {
@@ -134,7 +134,26 @@ func (device *Device) RoutineReceiveIncoming(maxBatchSize int, recv conn.Receive
 
 			// check size of packet
 
-			packet := bufsArrs[i][:size]
+			//packet := bufsArrs[i][:size]
+
+			// de-obfuscate
+			packet, err := func(packet []byte) ([]byte, error) {
+				o := &device.packetObfuscate
+				o.Lock()
+				defer o.Unlock()
+				if o.obfuscate.enabled {
+					start, len, err := o.obfuscate.DecryptZeroCopy(packet, 0, size)
+					if err != nil {
+						return nil, err
+					}
+					packet = packet[start:(start + len)]
+				}
+				return packet, nil
+			}(bufsArrs[i][:size])
+			if err != nil {
+				continue
+			}
+
 			msgType := binary.LittleEndian.Uint32(packet[:4])
 
 			switch msgType {

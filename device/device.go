@@ -11,10 +11,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"golang.zx2c4.com/wireguard/conn"
-	"golang.zx2c4.com/wireguard/ratelimiter"
-	"golang.zx2c4.com/wireguard/rwcancel"
-	"golang.zx2c4.com/wireguard/tun"
+	"github.com/extracomplex/wireguard-go-swgp/conn"
+	"github.com/extracomplex/wireguard-go-swgp/ratelimiter"
+	"github.com/extracomplex/wireguard-go-swgp/rwcancel"
+	"github.com/extracomplex/wireguard-go-swgp/tun"
 )
 
 type Device struct {
@@ -51,6 +51,11 @@ type Device struct {
 		sync.RWMutex
 		privateKey NoisePrivateKey
 		publicKey  NoisePublicKey
+	}
+
+	packetObfuscate struct {
+		sync.RWMutex
+		obfuscate Obfuscate
 	}
 
 	peers struct {

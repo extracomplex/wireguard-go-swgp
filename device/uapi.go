@@ -8,6 +8,7 @@ package device
 import (
 	"bufio"
 	"bytes"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"io"
@@ -18,7 +19,7 @@ import (
 	"sync"
 	"time"
 
-	"golang.zx2c4.com/wireguard/ipc"
+	"github.com/extracomplex/wireguard-go-swgp/ipc"
 )
 
 type IPCError struct {
@@ -80,6 +81,9 @@ func (device *Device) IpcGetOperation(w io.Writer) error {
 		device.staticIdentity.RLock()
 		defer device.staticIdentity.RUnlock()
 
+		device.packetObfuscate.RLock()
+		defer device.packetObfuscate.RUnlock()
+
 		device.peers.RLock()
 		defer device.peers.RUnlock()
 
@@ -95,6 +99,10 @@ func (device *Device) IpcGetOperation(w io.Writer) error {
 
 		if device.net.fwmark != 0 {
 			sendf("fwmark=%d", device.net.fwmark)
+		}
+
+		if device.packetObfuscate.obfuscate.enabled {
+			keyf("obfuscate_key", (*[32]byte)(&device.packetObfuscate.obfuscate.obfuscateKey))
 		}
 
 		for _, peer := range device.peers.keyMap {
@@ -239,6 +247,29 @@ func (device *Device) handleDeviceLine(key, value string) error {
 		}
 		device.log.Verbosef("UAPI: Removing all peers")
 		device.RemoveAllPeers()
+
+	case "obfuscate_key":
+		var sk NoisePresharedKey
+
+		if len(value) != 0 {
+			err := sk.FromHex(value)
+			if err != nil {
+				return ipcErrorf(ipc.IpcErrorInvalid, "failed to set obfuscate_key: %w", err)
+			}
+		}
+		device.log.Verbosef("UAPI: Updating obfuscate key")
+		func() {
+			device.packetObfuscate.Lock()
+			defer device.packetObfuscate.Unlock()
+
+			isZero := func(key []byte) bool {
+				var zero NoisePresharedKey
+				return subtle.ConstantTimeCompare(key[:], zero[:]) == 1
+			}
+
+			device.packetObfuscate.obfuscate.enabled = !isZero(sk[:]) // sk.IsZero()
+			device.packetObfuscate.obfuscate.ObfuscateSetKey(sk[:])
+		}()
 
 	default:
 		return ipcErrorf(ipc.IpcErrorInvalid, "invalid UAPI device key: %v", key)
